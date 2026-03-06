@@ -1,9 +1,12 @@
+
 name: Point Stock Daily Report (TW 16:00)
 
 on:
   schedule:
-    # 台灣 16:00 = UTC 08:00；週一～週五
+    # 台灣 16:00 = UTC 08:00；週一～週五（GitHub Actions cron 使用 UTC）[3](https://stackoverflow.com/questions/10318403/uploading-new-files-to-a-git-repository-directly-through-the-github-web-applicat)[4](https://www.youtube.com/watch?v=-9rTsx6ilvo)[5](https://docs.github.com/en/repositories/working-with-files/managing-files/adding-a-file-to-a-repository)
     - cron: "0 8 * * 1-5"
+    # 若你想避開整點降低排程延遲，可改成台灣 16:03（UTC 08:03）[3](https://stackoverflow.com/questions/10318403/uploading-new-files-to-a-git-repository-directly-through-the-github-web-applicat)[4](https://www.youtube.com/watch?v=-9rTsx6ilvo)
+    # - cron: "3 8 * * 1-5"
   workflow_dispatch: {}
 
 jobs:
@@ -31,6 +34,7 @@ jobs:
         run: |
           python src/run_report.py
 
+      # 無論 run_report 成功/失敗都上傳 artifacts（方便你下載檢查）
       - name: Upload artifacts (auto expire)
         if: always()
         uses: actions/upload-artifact@v4
@@ -40,20 +44,24 @@ jobs:
             output/*.xlsx
             output/*.pdf
             output/summary.json
+          # artifacts 可設定保留天數，避免容量累積[1](https://support.google.com/accounts/answer/185833?hl=en)[2](https://evermap.com/Tutorial_AMM_UseAppPasswords.asp)
           retention-days: 7
-  
+
+      # 無論成功/失敗都寄信（信內會依 summary.json 顯示成功/失敗與錯誤摘要）
       - name: Send email (always)
         if: always()
         env:
-        DAYS: "5"
-        SMTP_HOST: "smtp.gmail.com"
-    SMTP_PORT: "587"
-    SMTP_USER: ${{ secrets.SMTP_USER }}
-    SMTP_PASS: ${{ secrets.SMTP_PASS }}
-    MAIL_FROM:  ${{ secrets.MAIL_FROM }}
-    MAIL_TO:    ${{ secrets.MAIL_TO }}
-    MAIL_BCC:   ${{ secrets.MAIL_BCC }}
-  run: |
-    python src/mailer.py
+          DAYS: "5"
 
+          # ✅ 這兩個不要放 secrets，直接寫死最穩（避免空字串造成 connect 失敗）
+          SMTP_HOST: "smtp.gmail.com"
+          SMTP_PORT: "587"
 
+          # ✅ 敏感資訊才放 secrets
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM:  ${{ secrets.MAIL_FROM }}
+          MAIL_TO:    ${{ secrets.MAIL_TO }}
+          MAIL_BCC:   ${{ secrets.MAIL_BCC }}
+        run: |
+          python src/mailer.py
