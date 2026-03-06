@@ -68,7 +68,8 @@ def build_body(summary: dict):
 
 def main():
     smtp_host = os.environ['SMTP_HOST']
-    smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+    port_str = (os.environ.get("SMTP_PORT", "587") or "").strip()
+    smtp_port = int(port_str) if port_str else 587
     smtp_user = os.environ['SMTP_USER']
     smtp_pass = os.environ['SMTP_PASS']
 
