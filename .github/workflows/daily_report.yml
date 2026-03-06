@@ -3,10 +3,8 @@ name: Point Stock Daily Report (TW 16:00)
 
 on:
   schedule:
-    # 台灣 16:00 = UTC 08:00；週一～週五（GitHub Actions cron 使用 UTC）[3](https://stackoverflow.com/questions/10318403/uploading-new-files-to-a-git-repository-directly-through-the-github-web-applicat)[4](https://www.youtube.com/watch?v=-9rTsx6ilvo)[5](https://docs.github.com/en/repositories/working-with-files/managing-files/adding-a-file-to-a-repository)
+    # 台灣 16:00 = UTC 08:00；週一～週五（GitHub Actions cron 使用 UTC）[3](https://stackoverflow.com/questions/65634251/github-actions-dynamic-workflow-name)[4](https://docs.github.com/en/actions/reference)
     - cron: "0 8 * * 1-5"
-    # 若你想避開整點降低排程延遲，可改成台灣 16:03（UTC 08:03）[3](https://stackoverflow.com/questions/10318403/uploading-new-files-to-a-git-repository-directly-through-the-github-web-applicat)[4](https://www.youtube.com/watch?v=-9rTsx6ilvo)
-    # - cron: "3 8 * * 1-5"
   workflow_dispatch: {}
 
 jobs:
@@ -34,7 +32,6 @@ jobs:
         run: |
           python src/run_report.py
 
-      # 無論 run_report 成功/失敗都上傳 artifacts（方便你下載檢查）
       - name: Upload artifacts (auto expire)
         if: always()
         uses: actions/upload-artifact@v4
@@ -44,24 +41,31 @@ jobs:
             output/*.xlsx
             output/*.pdf
             output/summary.json
-          # artifacts 可設定保留天數，避免容量累積[1](https://support.google.com/accounts/answer/185833?hl=en)[2](https://evermap.com/Tutorial_AMM_UseAppPasswords.asp)
-          retention-days: 7
+          retention-days: 7  # artifacts 可設定保留天數，避免容量累積[2](https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions)[5](https://www.codestudy.net/blog/github-actions-dynamic-workflow-name/)
 
-      # 無論成功/失敗都寄信（信內會依 summary.json 顯示成功/失敗與錯誤摘要）
+      # ✅（新增段落 1）組出你要的報表信標題：台灣時區 yyyy-mm-dd
+      - name: Build mail subject (Asia/Taipei yyyy-mm-dd)
+        if: always()
+        run: |
+          echo "MAIL_SUBJECT=【劵商分點狙擊分析】$(TZ=Asia/Taipei date +'%Y-%m-%d')（TW 16:00）Point-stock-report" >> $GITHUB_ENV
+
       - name: Send email (always)
         if: always()
         env:
           DAYS: "5"
 
-          # ✅ 這兩個不要放 secrets，直接寫死最穩（避免空字串造成 connect 失敗）
+          # Host/Port 非敏感資訊，建議寫死避免 secrets 空值造成連線問題
           SMTP_HOST: "smtp.gmail.com"
           SMTP_PORT: "587"
 
-          # ✅ 敏感資訊才放 secrets
+          # 敏感資訊走 secrets
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_FROM:  ${{ secrets.MAIL_FROM }}
           MAIL_TO:    ${{ secrets.MAIL_TO }}
           MAIL_BCC:   ${{ secrets.MAIL_BCC }}
+
+          # ✅（新增段落 2）把上一個 step 寫進 GITHUB_ENV 的標題帶給 mailer.py
+          MAIL_SUBJECT: ${{ env.MAIL_SUBJECT }}
         run: |
           python src/mailer.py
