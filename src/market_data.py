@@ -447,7 +447,10 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
             "dealer_net_oi": 0,
         }
 
-        # 找到所有表格的 tr
+        # 自營商有兩行（自行買賣+避險），需要累加
+        dealer_accumulated = 0
+        dealer_found = False
+
         for table in soup.find_all("table"):
             for tr in table.find_all("tr"):
                 tds = tr.find_all("td")
@@ -457,23 +460,33 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
                 name = tds[0].get_text(strip=True)
                 vals = [td.get_text(strip=True) for td in tds]
 
-                # 多空淨額-未平倉口數 = index 11（固定位置）
-                # 多空淨額-交易口數 = index 5（備用）
+                # 多空淨額-未平倉口數 = index 11
                 net_oi = _safe_int(vals[11]) if len(vals) > 11 else 0
                 net_trade = _safe_int(vals[5]) if len(vals) > 5 else 0
 
-                # 驗證：口數通常在 -500,000 ~ +500,000 之間
-                # 如果 > 1,000,000 代表可能拿到金額欄（千元），需要除以 1000 或用交易欄
                 if abs(net_oi) > 1_000_000:
                     print(f"  [futures] ⚠ {name} net_oi={net_oi} 異常大，改用 net_trade={net_trade}")
-                    net_oi = net_trade  # fallback 到交易口數
+                    net_oi = net_trade
 
-                if "外資" in name:
+                print(f"  [futures] {date_str} | {name} | OI={net_oi}")
+
+                if "外資" in name and "合計" not in name:
                     result["foreign_net_oi"] = net_oi
                 elif "投信" in name:
                     result["trust_net_oi"] = net_oi
                 elif "自營商" in name:
-                    result["dealer_net_oi"] = net_oi
+                    if "合計" in name:
+                        # 如果有合計行，直接用合計
+                        result["dealer_net_oi"] = net_oi
+                        dealer_found = True
+                    else:
+                        # 自行買賣 + 避險 → 累加
+                        dealer_accumulated += net_oi
+                        dealer_found = True
+
+        # 如果沒有合計行，用累加值
+        if dealer_found and result["dealer_net_oi"] == 0:
+            result["dealer_net_oi"] = dealer_accumulated
 
         if any(v != 0 for k, v in result.items() if k != "date"):
             return result
