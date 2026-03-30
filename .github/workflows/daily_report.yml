@@ -1,15 +1,22 @@
-
-name: Point Stock Daily Report (TW 16:00)
+name: 券商分點狙擊分析 (TW 16:00)
 
 on:
   schedule:
-    # 台灣 16:00 = UTC 08:00；週一～週五（GitHub Actions cron 使用 UTC）[3](https://stackoverflow.com/questions/65634251/github-actions-dynamic-workflow-name)[4](https://docs.github.com/en/actions/reference)
+    # 台灣 16:00 = UTC 08:00；週一～週五
     - cron: "0 8 * * 1-5"
   workflow_dispatch: {}
 
 jobs:
   report:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      TZ: Asia/Taipei
+      DAYS: "5"
+      TOP_N: "10"
+      MARKET_DATA: "1"
+      MARKET_HISTORY_DAYS: "6"
 
     steps:
       - name: Checkout
@@ -18,21 +25,49 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate Excel/PDF (DAYS=5)
+      - name: Generate Excel/PDF + market data
+        continue-on-error: true
         env:
-          TZ: Asia/Taipei
-          DAYS: "5"
+          PYTHONUNBUFFERED: "1"
         run: |
           python src/run_report.py
 
-      - name: Upload artifacts (auto expire)
+      - name: Gemini analysis (2.5-pro + fallback)
+        if: always()
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-2.5-pro"
+          GEMINI_TEMPERATURE: "0.3"
+          PROMPT_TOP_BROKERS: "7"
+          PROMPT_TOP_STOCKS: "7"
+          GEMINI_RETRIES: "3"
+          GEMINI_ENABLE_FIXUP: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python src/ai_analyze_gemini.py
+
+      - name: Verify analysis
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          with open("output/summary.json", "r", encoding="utf-8") as f:
+              s = json.load(f)
+          t = s.get("ai_analysis", "") or ""
+          print(f"model={s.get('ai_model')} chars={len(t)} lines={len(t.splitlines())}")
+          md = s.get("market_data", {})
+          print(f"market: inst={len(md.get('institutional',[]))} taiex={len(md.get('taiex',[]))} futures={len(md.get('futures',[]))}")
+          PY
+
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -41,31 +76,25 @@ jobs:
             output/*.xlsx
             output/*.pdf
             output/summary.json
-          retention-days: 7  # artifacts 可設定保留天數，避免容量累積[2](https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions)[5](https://www.codestudy.net/blog/github-actions-dynamic-workflow-name/)
+            output/ai_analysis.txt
+          retention-days: 7
+          if-no-files-found: warn
 
-      # ✅（新增段落 1）組出你要的報表信標題：台灣時區 yyyy-mm-dd
-      - name: Build mail subject (Asia/Taipei yyyy-mm-dd)
+      - name: Build mail subject
         if: always()
         run: |
-          echo "MAIL_SUBJECT=【劵商分點狙擊分析】$(TZ=Asia/Taipei date +'%Y-%m-%d')（TW 16:00）Point-stock-report" >> $GITHUB_ENV
+          echo "MAIL_SUBJECT=【券商分點狙擊分析】$(TZ=Asia/Taipei date +'%Y-%m-%d')（TW 16:00）" >> $GITHUB_ENV
 
-      - name: Send email (always)
+      - name: Send email
         if: always()
         env:
-          DAYS: "5"
-
-          # Host/Port 非敏感資訊，建議寫死避免 secrets 空值造成連線問題
           SMTP_HOST: "smtp.gmail.com"
           SMTP_PORT: "587"
-
-          # 敏感資訊走 secrets
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_FROM:  ${{ secrets.MAIL_FROM }}
           MAIL_TO:    ${{ secrets.MAIL_TO }}
           MAIL_BCC:   ${{ secrets.MAIL_BCC }}
-
-          # ✅（新增段落 2）把上一個 step 寫進 GITHUB_ENV 的標題帶給 mailer.py
           MAIL_SUBJECT: ${{ env.MAIL_SUBJECT }}
         run: |
           python src/mailer.py
