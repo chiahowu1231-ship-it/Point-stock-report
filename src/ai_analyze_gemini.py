@@ -309,6 +309,12 @@ def call_gemini_single(prompt: str, model: str) -> str:
                     time.sleep(sleep_s)
                     continue
 
+            # ── 400/404: 模型不存在或不支援 → 立刻換模型，不重試 ──
+            if r.status_code in (400, 404):
+                raise ModelUnavailableError(
+                    f"[{model}] HTTP {r.status_code} 模型不可用: {body}"
+                )
+
             # ── 5xx 重試 ──
             if r.status_code in (500, 502, 503, 504):
                 last_exc = RuntimeError(f"[{model}] HTTP {r.status_code}: {body}")
@@ -330,10 +336,10 @@ def call_gemini_single(prompt: str, model: str) -> str:
             text = "".join(p.get("text", "") for p in parts).strip()
             return text if text else json.dumps(data, ensure_ascii=False)
 
-        except QuotaExceededError:
+        except (QuotaExceededError, ModelUnavailableError):
             raise  # 不重試，直接往上拋
         except Exception as e:
-            if isinstance(e, QuotaExceededError):
+            if isinstance(e, (QuotaExceededError, ModelUnavailableError)):
                 raise
             last_exc = e
             sleep_s = BASE_SLEEP * (2 ** attempt) + random.uniform(0, 1.0)
@@ -347,6 +353,11 @@ def call_gemini_single(prompt: str, model: str) -> str:
 
 class QuotaExceededError(RuntimeError):
     """429 Quota Exceeded — 需要切換模型，重試無效"""
+    pass
+
+
+class ModelUnavailableError(RuntimeError):
+    """400/404 模型不存在或不支援 — 需要切換模型"""
     pass
 
 
@@ -370,6 +381,10 @@ def call_gemini_with_fallback(prompt: str) -> tuple[str, str]:
             return text, model
         except QuotaExceededError as e:
             print(f"[WARN] {model} 配額耗盡，嘗試下一個模型...")
+            last_err = e
+            continue
+        except ModelUnavailableError as e:
+            print(f"[WARN] {model} 不可用(400/404)，嘗試下一個模型...")
             last_err = e
             continue
         except Exception as e:
