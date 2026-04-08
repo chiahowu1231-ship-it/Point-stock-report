@@ -168,7 +168,7 @@ def _badge(text: str, bg: str, color: str = "#fff", px: int = 7) -> str:
 def _sec_hdr(icon: str, title: str, color_key: str = "blue", subtitle: str = "") -> str:
     c = SECTION_COLORS.get(color_key, SECTION_COLORS["blue"])
     sub_html = (
-        f'<span style="font-size:12px;color:rgba(255,255,255,.75);'
+        f'<span style="font-size:12px;color:#333;'
         f'margin-left:12px;font-weight:400;">{_esc(subtitle)}</span>'
         if subtitle else ""
     )
@@ -176,7 +176,7 @@ def _sec_hdr(icon: str, title: str, color_key: str = "blue", subtitle: str = "")
         f'<div style="margin:28px 0 0;padding:13px 18px;'
         f'background:linear-gradient(90deg,{c["bg"]},{c["hdr"]});'
         f'border-radius:5px 5px 0 0;border-left:4px solid rgba(255,255,255,.35);">'
-        f'<span style="font-size:16px;font-weight:800;color:#fff;letter-spacing:.6px;">'
+        f'<span style="font-size:16px;font-weight:800;color:#111;letter-spacing:.6px;">'
         f'{icon}&nbsp; {_esc(title)}</span>{sub_html}</div>'
     )
 
@@ -197,7 +197,7 @@ def _table_open(col_styles: list = None) -> str:
 TABLE_CLOSE = "</table>"
 
 
-def _th_row(*cols, bg: str = "#2C3E50", color: str = "#ECF0F1") -> str:
+def _th_row(*cols, bg: str = "#2C3E50", color: str = "#111") -> str:
     """表頭列 — cols = (label, align) tuples"""
     cells = "".join(
         f'<th style="padding:7px 11px;text-align:{align};background:{bg};'
@@ -478,12 +478,12 @@ def _render_broker_block(block: dict, rank: int) -> str:
         f'background:linear-gradient(90deg,#1A252F,#2C3E50);'
         f'border-radius:5px 5px 0 0;'
         f'display:flex;align-items:center;justify-content:space-between;">'
-        f'<span style="font-size:16px;font-weight:800;color:#FFFFFF;letter-spacing:.5px;">'
+        f'<span style="font-size:16px;font-weight:800;color:#111;letter-spacing:.5px;">'
         f'{medal}&nbsp; {broker}</span>'
         f'<span style="font-size:13px;">'
-        f'<span style="color:#BDC3C7;">總淨超&nbsp;</span>'
+        f'<span style="color:#333;">總淨超&nbsp;</span>'
         f'<span style="color:{nc};font-weight:800;font-size:15px;">{_fi(total_net)}</span>'
-        f'<span style="color:#BDC3C7;font-size:12px;">&nbsp;張</span>'
+        f'<span style="color:#333;font-size:12px;">&nbsp;張</span>'
         f'</span></div>'
     )
 
@@ -813,7 +813,7 @@ def build_html(summary: dict) -> str:
         p.append(
             '<div style="margin:8px 0 4px;padding:6px 14px;'
             'background:#1A2A3A;border-radius:4px;">'
-            '<span style="font-size:13px;font-weight:700;color:#ECF0F1;'
+            '<span style="font-size:13px;font-weight:700;color:#111;'
             'letter-spacing:1px;">一、大盤環境速覽</span></div>'
         )
 
@@ -836,7 +836,7 @@ def build_html(summary: dict) -> str:
         p.append(
             '<div style="margin:20px 0 4px;padding:6px 14px;'
             'background:#1A2A3A;border-radius:4px;">'
-            '<span style="font-size:13px;font-weight:700;color:#ECF0F1;'
+            '<span style="font-size:13px;font-weight:700;color:#111;'
             'letter-spacing:1px;">二、券商分點明細（淨超 Top '
             f'{len(top_preview)} 家）</span></div>'
         )
@@ -850,7 +850,7 @@ def build_html(summary: dict) -> str:
         p.append(
             '<div style="margin:20px 0 4px;padding:6px 14px;'
             'background:#1A2A3A;border-radius:4px;">'
-            '<span style="font-size:13px;font-weight:700;color:#ECF0F1;'
+            '<span style="font-size:13px;font-weight:700;color:#111;'
             'letter-spacing:1px;">三、千張大戶持股比例</span></div>'
         )
         p.append(_render_tdcc(tdcc))
@@ -866,7 +866,7 @@ def build_html(summary: dict) -> str:
     p.append(
         '<div style="margin:24px 0 4px;padding:6px 14px;'
         'background:#1A2A3A;border-radius:4px;">'
-        '<span style="font-size:13px;font-weight:700;color:#ECF0F1;'
+        '<span style="font-size:13px;font-weight:700;color:#111;'
         'letter-spacing:1px;">四、🤖 AI 深度分析</span></div>'
     )
     # 模型資訊 pill
