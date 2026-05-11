@@ -1,1 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="theme-color" content="#0F1B2E">
+<title>券商分點狙擊分析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
 
+<!-- ── HERO ────────────────────────────────────────────── -->
+<header class="hero">
+  <div class="hero-inner">
+    <h1>🎯 券商分點狙擊分析</h1>
+    <div class="hero-meta">
+      <span id="hero-date">載入中…</span>
+      <span id="hero-status"></span>
+    </div>
+    <div class="hero-stats" id="hero-stats"></div>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- 一、大盤環境速覽 -->
+  <section class="card" id="sec-market">
+    <h2>① 大盤環境速覽</h2>
+
+    <div class="subsection">
+      <h3>📊 大盤指數（近 6 日）</h3>
+      <div id="taiex-table"></div>
+    </div>
+
+    <div class="subsection">
+      <h3>🏦 三大法人買賣超（億元）</h3>
+      <div id="institutional-table"></div>
+    </div>
+
+    <div class="subsection">
+      <h3>📈 期貨三大法人台指期淨部位（口）</h3>
+      <div id="futures-table"></div>
+    </div>
+
+    <div class="subsection">
+      <h3>💰 融資融券變化</h3>
+      <div id="margin-table"></div>
+    </div>
+  </section>
+
+  <!-- 二、券商分點明細 -->
+  <section class="card" id="sec-brokers">
+    <h2>② 券商分點明細（淨超 Top 排行）</h2>
+    <div id="broker-list"></div>
+  </section>
+
+  <!-- 三、千張大戶 -->
+  <section class="card" id="sec-tdcc" style="display:none;">
+    <h2>③ 千張大戶持股比例</h2>
+    <div id="tdcc-cards"></div>
+  </section>
+
+  <!-- 四、AI 分析 -->
+  <section class="card" id="sec-ai">
+    <h2>④ 🤖 AI 深度分析</h2>
+    <div id="ai-model-badges"></div>
+    <div id="ai-content"></div>
+  </section>
+
+  <!-- 錯誤摘要 -->
+  <section class="card error-card" id="sec-errors" style="display:none;">
+    <h2>⚠️ 錯誤摘要</h2>
+    <ul id="error-list"></ul>
+  </section>
+
+</main>
+
+<!-- ── FOOTER ──────────────────────────────────────────── -->
+<footer class="footer">
+  <div class="disclaimer">
+    <b>[免責聲明]</b>
+    帶進帶出是違法的行為，此資料皆為網上根據盤後資訊大數據所取得訊息，
+    非作為或被視為買進或售出標的的邀請或意象，
+    請自行依據取得資訊評估風險與獲利，<b>有賺有賠請斟酌</b>。
+  </div>
+  <div class="footer-meta">
+    此頁由 GitHub Actions 自動建構 ｜ <span id="build-time">—</span> ｜
+    券商分點狙擊分析系統
+  </div>
+</footer>
+
+<script>
+// ─────────────────────────────────────────────────────────
+//  工具函式
+// ─────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+
+const esc = (s) => String(s ?? "")
+  .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+
+const fmtInt = (n) => {
+  if (n === null || n === undefined || n === "") return "—";
+  try { return Number(n).toLocaleString(); } catch { return String(n); }
+};
+
+const fmtSignedBillion = (n) => {
+  if (n === null || n === undefined) return "—";
+  const v = Number(n);
+  if (isNaN(v)) return String(n);
+  if (Math.abs(v) >= 1e9) return (v / 1e9).toFixed(2) + "B";
+  if (Math.abs(v) >= 1e8) return (v / 1e8).toFixed(1) + "億";
+  if (Math.abs(v) >= 1e4) return (v / 1e4).toFixed(0) + "萬";
+  const s = v.toLocaleString();
+  return v > 0 ? "+" + s : s;
+};
+
+const fmtSignedInt = (n) => {
+  const v = Number(n);
+  if (isNaN(v)) return String(n);
+  return v > 0 ? "+" + v.toLocaleString() : v.toLocaleString();
+};
+
+const colorClass = (v) => {
+  const n = Number(String(v).replace(/[,%+億萬]/g,""));
+  if (isNaN(n) || n === 0) return "neutral";
+  return n > 0 ? "pos" : "neg";  // 台股慣例：正=紅 pos，負=綠 neg
+};
+
+const fmtDate = (d) => {
+  const s = String(d).trim();
+  if (/^\d{8}$/.test(s)) return `${s.slice(0,4)}/${s.slice(4,6)}/${s.slice(6,8)}`;
+  return s;
+};
+
+// ─────────────────────────────────────────────────────────
+//  TAIEX 大盤指數
+// ─────────────────────────────────────────────────────────
+function renderTaiex(taiex) {
+  if (!Array.isArray(taiex) || taiex.length === 0) {
+    $("taiex-table").innerHTML = '<p class="empty">無資料</p>';
+    return;
+  }
+  let html = `<table class="data-table">
+    <thead><tr>
+      <th>日期</th><th class="r">收盤</th><th class="r">漲跌</th>
+      <th class="r">漲跌幅</th><th class="r">成交金額(億)</th>
+    </tr></thead><tbody>`;
+  taiex.forEach((t, i) => {
+    const chg = Number(t.change || 0);
+    const chgPct = Number(t.change_pct || 0);
+    const cls = chg > 0 ? "pos" : chg < 0 ? "neg" : "neutral";
+    html += `<tr class="${i === 0 ? "today" : ""}">
+      <td>${esc(fmtDate(t.date))}</td>
+      <td class="r">${fmtInt(t.close)}</td>
+      <td class="r ${cls}">${chg > 0 ? "+" : ""}${chg.toFixed(2)}</td>
+      <td class="r ${cls}">${chgPct > 0 ? "+" : ""}${chgPct.toFixed(2)}%</td>
+      <td class="r">${Number(t.amount_billion || 0).toFixed(0)}</td>
+    </tr>`;
+  });
+  html += "</tbody></table>";
+  $("taiex-table").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────
+//  三大法人
+// ─────────────────────────────────────────────────────────
+function renderInstitutional(inst) {
+  if (!Array.isArray(inst) || inst.length === 0) {
+    $("institutional-table").innerHTML = '<p class="empty">無資料</p>';
+    return;
+  }
+  // 取 today + 累計
+  const today = inst[0] || {};
+  const cum = inst.slice(0, 6).reduce((a, b) => ({
+    foreign: a.foreign + Number(b?.foreign?.net || 0),
+    trust:   a.trust   + Number(b?.trust?.net   || 0),
+    dealer:  a.dealer  + Number(b?.dealer?.net  || 0),
+  }), { foreign:0, trust:0, dealer:0 });
+
+  const row = (label, todayVal, cumVal) => {
+    const tc = colorClass(todayVal);
+    const cc = colorClass(cumVal);
+    return `<tr>
+      <td>${label}</td>
+      <td class="r ${tc}">${fmtSignedBillion(todayVal)}</td>
+      <td class="r ${cc}">${fmtSignedBillion(cumVal)}</td>
+    </tr>`;
+  };
+
+  let html = `<table class="data-table">
+    <thead><tr><th>類別</th><th class="r">今日</th><th class="r">6日累計</th></tr></thead>
+    <tbody>
+      ${row("外資", today?.foreign?.net || 0, cum.foreign)}
+      ${row("投信", today?.trust?.net   || 0, cum.trust)}
+      ${row("自營", today?.dealer?.net  || 0, cum.dealer)}
+    </tbody></table>`;
+
+  // 投信 / 自營商 5日明細（券商分點重點關注）
+  if (inst.length > 1) {
+    html += `<div class="subsubsection-title">投信 / 自營商 每日明細（近 ${Math.min(inst.length, 6)} 日）</div>`;
+    html += `<table class="data-table small">
+      <thead><tr>
+        <th>日期</th>
+        <th class="r">投信</th>
+        <th class="r">自營</th>
+      </tr></thead><tbody>`;
+    inst.slice(0, 6).forEach((d, i) => {
+      const t = Number(d?.trust?.net || 0);
+      const dl = Number(d?.dealer?.net || 0);
+      html += `<tr class="${i === 0 ? "today" : ""}">
+        <td>${esc(fmtDate(d.date))}</td>
+        <td class="r ${colorClass(t)}">${fmtSignedBillion(t)}</td>
+        <td class="r ${colorClass(dl)}">${fmtSignedBillion(dl)}</td>
+      </tr>`;
+    });
+    html += "</tbody></table>";
+  }
+
+  $("institutional-table").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────
+//  期貨三大法人台指期淨部位
+// ─────────────────────────────────────────────────────────
+function renderFutures(futures) {
+  if (!Array.isArray(futures) || futures.length === 0) {
+    $("futures-table").innerHTML = '<p class="empty">無資料</p>';
+    return;
+  }
+  let html = `<table class="data-table">
+    <thead><tr>
+      <th>日期</th>
+      <th class="r">外資</th>
+      <th class="r">投信</th>
+      <th class="r">自營</th>
+    </tr></thead><tbody>`;
+  futures.slice(0, 6).forEach((f, i) => {
+    const fn = Number(f?.foreign?.net_oi || 0);
+    const tn = Number(f?.trust?.net_oi   || 0);
+    const dn = Number(f?.dealer?.net_oi  || 0);
+    html += `<tr class="${i === 0 ? "today" : ""}">
+      <td>${esc(fmtDate(f.date))}</td>
+      <td class="r ${colorClass(fn)}">${fmtSignedInt(fn)}</td>
+      <td class="r ${colorClass(tn)}">${fmtSignedInt(tn)}</td>
+      <td class="r ${colorClass(dn)}">${fmtSignedInt(dn)}</td>
+    </tr>`;
+  });
+  html += "</tbody></table>";
+  $("futures-table").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────
+//  融資融券
+// ─────────────────────────────────────────────────────────
+function renderMargin(margin) {
+  if (!Array.isArray(margin) || margin.length === 0) {
+    $("margin-table").innerHTML = '<p class="empty">無資料</p>';
+    return;
+  }
+  let html = `<table class="data-table">
+    <thead><tr>
+      <th>日期</th>
+      <th class="r">融資餘額(張)</th>
+      <th class="r">融資增減</th>
+      <th class="r">融券餘額(張)</th>
+      <th class="r">融券增減</th>
+    </tr></thead><tbody>`;
+  margin.slice(0, 6).forEach((m, i) => {
+    const mc = Number(m.margin_change || 0);
+    const sc = Number(m.short_change  || 0);
+    html += `<tr class="${i === 0 ? "today" : ""}">
+      <td>${esc(fmtDate(m.date))}</td>
+      <td class="r">${fmtInt(m.margin_balance)}</td>
+      <td class="r ${colorClass(mc)}">${fmtSignedInt(mc)}</td>
+      <td class="r">${fmtInt(m.short_balance)}</td>
+      <td class="r ${colorClass(sc)}">${fmtSignedInt(sc)}</td>
+    </tr>`;
+  });
+  html += "</tbody></table>";
+  $("margin-table").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────
+//  券商分點 Top（可收合）
+// ─────────────────────────────────────────────────────────
+function renderBrokers(top_preview) {
+  if (!Array.isArray(top_preview) || top_preview.length === 0) {
+    $("broker-list").innerHTML = '<p class="empty">無券商分點資料</p>';
+    return;
+  }
+
+  const medals = ["🥇", "🥈", "🥉"];
+  let html = "";
+  top_preview.forEach((block, idx) => {
+    const broker = block.broker || "";
+    const totalNet = Number(block.total_net || 0);
+    const rows = Array.isArray(block.rows) ? block.rows : [];
+    const medal = idx < 3 ? medals[idx] : `#${idx + 1}`;
+    const cls = colorClass(totalNet);
+    const isOpen = idx < 3;  // 前三家預設展開
+
+    html += `<details class="broker-block" ${isOpen ? "open" : ""}>
+      <summary>
+        <span class="broker-medal">${medal}</span>
+        <span class="broker-name">${esc(broker)}</span>
+        <span class="broker-net ${cls}">總淨超 ${fmtSignedInt(totalNet)} 張</span>
+      </summary>
+      <table class="data-table small broker-rows">
+        <thead><tr>
+          <th>#</th>
+          <th>代碼</th>
+          <th>名稱</th>
+          <th class="r">淨超(張)</th>
+          <th class="r">區間均價</th>
+          <th class="r">現價</th>
+          <th class="r">乖離率</th>
+        </tr></thead><tbody>`;
+    rows.forEach((r, i) => {
+      const net = Number(r.net || 0);
+      const bias = String(r.bias || "0%");
+      const biasNum = Number(bias.replace("%", ""));
+      let biasCls = "neutral";
+      if (biasNum > 10) biasCls = "pos-strong";
+      else if (biasNum > 3) biasCls = "pos";
+      else if (biasNum < 0) biasCls = "neg";
+      html += `<tr>
+        <td>${i + 1}</td>
+        <td>${esc(r.sid || "")}</td>
+        <td>${esc(r.name || "")}</td>
+        <td class="r ${colorClass(net)}">${fmtSignedInt(net)}</td>
+        <td class="r">${esc(r.avg ?? "—")}</td>
+        <td class="r">${esc(r.price ?? "—")}</td>
+        <td class="r ${biasCls}">${esc(bias)}</td>
+      </tr>`;
+    });
+    html += "</tbody></table></details>";
+  });
+
+  $("broker-list").innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────
+//  千張大戶
+// ─────────────────────────────────────────────────────────
+function renderTdcc(tdcc) {
+  if (!Array.isArray(tdcc) || tdcc.length === 0) return false;
+  let html = '<div class="tdcc-grid">';
+  tdcc.forEach(t => {
+    const pct = Number(t.holding_pct || 0);
+    const chg = Number(t.holding_change || 0);
+    const cls = colorClass(chg);
+    html += `<div class="tdcc-card">
+      <div class="tdcc-name">${esc(t.stock_id)} ${esc(t.name || "")}</div>
+      <div class="tdcc-pct">${pct.toFixed(2)}%</div>
+      <div class="tdcc-chg ${cls}">${chg > 0 ? "▲" : chg < 0 ? "▼" : "—"} ${Math.abs(chg).toFixed(3)}%</div>
+    </div>`;
+  });
+  html += "</div>";
+  $("tdcc-cards").innerHTML = html;
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────
+//  AI 分析（A~F 章節 → 可摺疊區塊）
+// ─────────────────────────────────────────────────────────
+function renderAI(aiText, aiModel, aiProvider, aiVersion) {
+  // 模型 badge
+  const badges = [aiProvider, aiModel, aiVersion].filter(Boolean);
+  if (badges.length) {
+    $("ai-model-badges").innerHTML = badges.map(b =>
+      `<span class="model-pill">${esc(b)}</span>`
+    ).join("");
+  }
+
+  if (!aiText) {
+    $("ai-content").innerHTML = '<p class="empty">尚無 AI 分析資料</p>';
+    return;
+  }
+
+  // 切段：用 "A) " "B) " ... "F) " 為分隔符
+  const lines = aiText.split("\n");
+  const sections = [];
+  let cur = null;
+  const headerRe = /^([A-F])\)\s*(.+?)\s*$/;
+  lines.forEach(line => {
+    const m = headerRe.exec(line.trim());
+    if (m) {
+      if (cur) sections.push(cur);
+      cur = { code: m[1], title: m[2], body: [] };
+    } else if (cur) {
+      cur.body.push(line);
+    } else {
+      // 章節前的 preamble
+      if (!sections.length || sections[0].code !== "_") {
+        sections.unshift({ code: "_", title: "", body: [] });
+      }
+      sections[0].body.push(line);
+    }
+  });
+  if (cur) sections.push(cur);
+
+  // 處理 markdown bold/italic + 關鍵字高亮
+  const mdInline = (s) => {
+    let h = esc(s);
+    h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+    // 關鍵字高亮
+    const kws = {
+      "進場":"kw-blue","停損":"kw-red","了結":"kw-purple",
+      "突破":"kw-blue","回測":"kw-orange","不跌破":"kw-green",
+      "放量":"kw-red","縮量":"kw-green","偏多":"kw-red","偏空":"kw-green",
+      "觀察":"kw-gray","風險":"kw-red","連買":"kw-red","連賣":"kw-green",
+      "中性":"kw-gray","高度集中":"kw-purple","強勢佈局":"kw-red",
+      "逢低承接":"kw-blue","共識度高":"kw-red","被套":"kw-red",
+    };
+    for (const [kw, cls] of Object.entries(kws)) {
+      h = h.replaceAll(kw, `<b class="${cls}">${kw}</b>`);
+    }
+    return h;
+  };
+
+  let html = "";
+  sections.forEach((sec, i) => {
+    if (sec.code === "_") {
+      // 前言
+      const body = sec.body.join("\n").trim();
+      if (body) html += `<div class="ai-preamble">${mdInline(body)}</div>`;
+      return;
+    }
+    const bodyText = sec.body.join("\n").trim();
+    if (!bodyText) return;
+    const isOpen = i < 4;  // 預設展開前 4 段
+    html += `<details class="ai-section" ${isOpen ? "open" : ""}>
+      <summary>
+        <span class="ai-code">${sec.code})</span>
+        <span class="ai-title">${esc(sec.title)}</span>
+      </summary>
+      <div class="ai-body">${
+        bodyText.split("\n").map(line => {
+          const t = line.trim();
+          if (!t) return "";
+          // 列表項目
+          if (/^[•·▪‧-]\s/.test(t) || /^\d+[.)]\s/.test(t)) {
+            return `<div class="ai-bullet">${mdInline(t)}</div>`;
+          }
+          return `<div class="ai-line">${mdInline(t)}</div>`;
+        }).join("")
+      }</div>
+    </details>`;
+  });
+
+  $("ai-content").innerHTML = html || '<p class="empty">AI 分析格式無法解析</p>';
+}
+
+// ─────────────────────────────────────────────────────────
+//  錯誤摘要
+// ─────────────────────────────────────────────────────────
+function renderErrors(errors, marketErrors) {
+  const all = [...(errors || []), ...(marketErrors || [])];
+  if (!all.length) return;
+  $("sec-errors").style.display = "block";
+  $("error-list").innerHTML = all.slice(0, 20).map(e =>
+    `<li>${esc(e)}</li>`
+  ).join("");
+}
+
+// ─────────────────────────────────────────────────────────
+//  主流程
+// ─────────────────────────────────────────────────────────
+async function init() {
+  let data = null;
+  try {
+    const res = await fetch("./data.json?_=" + Date.now());
+    data = await res.json();
+  } catch (e) {
+    document.body.innerHTML = `<div class="fatal">
+      <h1>⚠️ 無法載入資料</h1>
+      <p>${esc(e.message || e)}</p>
+    </div>`;
+    return;
+  }
+
+  // Hero
+  const dt = data.generated_at || data.site_built_at || "";
+  const rptDate = (dt || "").slice(0, 10) || "—";
+  $("hero-date").textContent = `報告日期 ${rptDate}`;
+
+  const ok = data.success !== false;
+  $("hero-status").innerHTML = ok
+    ? '<span class="status-pill ok">✅ 正常</span>'
+    : '<span class="status-pill err">⚠️ 部分失敗</span>';
+
+  $("hero-stats").innerHTML = [
+    `<div class="hero-stat">近 <strong>${data.days || 5}</strong> 日</div>`,
+    `<div class="hero-stat">資料 <strong>${(data.total_rows || 0).toLocaleString()}</strong> 筆</div>`,
+    `<div class="hero-stat">券商 OK <strong>${data.brokers_ok || 0}</strong> / FAIL <strong class="${(data.brokers_fail || 0) > 0 ? "neg" : ""}">${data.brokers_fail || 0}</strong></div>`,
+  ].join("");
+
+  // Market data
+  const md = data.market_data || {};
+  renderTaiex(md.taiex);
+  renderInstitutional(md.institutional);
+  renderFutures(md.futures);
+  renderMargin(md.margin);
+
+  // Brokers
+  renderBrokers(data.top_preview);
+
+  // TDCC
+  if (renderTdcc(md.tdcc)) $("sec-tdcc").style.display = "block";
+
+  // AI
+  renderAI(data.ai_analysis, data.ai_model, data.ai_provider, data.ai_analyzer_version);
+
+  // Errors
+  renderErrors(data.errors, md.fetch_errors);
+
+  // Build time
+  $("build-time").textContent = (data.site_built_at || dt || "").replace("T", " ").slice(0, 19);
+}
+
+init();
+</script>
+</body>
+</html>
