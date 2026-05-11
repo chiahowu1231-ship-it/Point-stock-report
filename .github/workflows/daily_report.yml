@@ -6,7 +6,21 @@ on:
     - cron: "0 8 * * 1-5"
   workflow_dispatch: {}
 
+# GitHub Pages 部署所需權限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一時間只跑一個 Pages 部署
+concurrency:
+  group: "pages-${{ github.ref }}"
+  cancel-in-progress: false
+
 jobs:
+  # ─────────────────────────────────────────────────────────
+  #  Job 1: 產生報表 + AI + Email + Telegram + 建立 Pages 內容
+  # ─────────────────────────────────────────────────────────
   report:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -67,6 +81,12 @@ jobs:
           print(f"market: inst={len(md.get('institutional',[]))} taiex={len(md.get('taiex',[]))} futures={len(md.get('futures',[]))}")
           PY
 
+      # 🆕 建構 Pages 網頁版（讀 output/summary.json + web/ → site/）
+      - name: Build GitHub Pages site
+        if: always()
+        run: |
+          python src/build_site.py
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -79,6 +99,13 @@ jobs:
             output/ai_analysis.txt
           retention-days: 7
           if-no-files-found: warn
+
+      # 🆕 上傳 Pages artifact，供 deploy-pages job 部署
+      - name: Upload Pages artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
 
       - name: Build mail subject
         if: always()
@@ -98,3 +125,29 @@ jobs:
           MAIL_SUBJECT: ${{ env.MAIL_SUBJECT }}
         run: |
           python src/mailer.py
+
+      # 🆕 Telegram 推送（失敗不影響 workflow，未設 Secret 自動跳過）
+      - name: Send Telegram notification
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGES_URL:          ${{ secrets.PAGES_URL }}
+        run: |
+          python src/telegram_sender.py
+
+  # ─────────────────────────────────────────────────────────
+  #  Job 2: 部署 GitHub Pages
+  # ─────────────────────────────────────────────────────────
+  deploy-pages:
+    needs: report
+    if: always()
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
