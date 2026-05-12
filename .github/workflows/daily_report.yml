@@ -34,10 +34,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -89,7 +89,7 @@ jobs:
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ike-report
           path: |
@@ -100,10 +100,17 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+      # 🆕 自動啟用 GitHub Pages（首次執行用，已啟用後也不會出錯）
+      - name: Configure GitHub Pages
+        if: always()
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       # 🆕 上傳 Pages artifact，供 deploy-pages job 部署
       - name: Upload Pages artifact
         if: always()
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: ./site
 
@@ -150,4 +157,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
