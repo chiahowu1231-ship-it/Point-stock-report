@@ -361,7 +361,7 @@ function renderTdcc(tdcc) {
 }
 
 // ─────────────────────────────────────────────────────────
-//  AI 分析（A~F 章節 → 可摺疊區塊）
+//  AI 分析（A~F 章節 → 可摺疊區塊；子章節+編號要點自動拆行）
 // ─────────────────────────────────────────────────────────
 function renderAI(aiText, aiModel, aiProvider, aiVersion) {
   // 模型 badge
@@ -377,34 +377,65 @@ function renderAI(aiText, aiModel, aiProvider, aiVersion) {
     return;
   }
 
-  // 切段：用 "A) " "B) " ... "F) " 為分隔符
-  const lines = aiText.split("\n");
+  // ── Step 1: 把整段文字「攤平」後重新插入換行符 ─────
+  // AI 模型 (尤其 flash 版) 常把所有內容黏在同一行；
+  // 我們用一系列 regex 在語意邊界處強制插入 \n
+  let normalized = aiText.replace(/\r\n/g, "\n");
+
+  // 1a. "A) 標題" / "B) 標題" 確保獨佔一行
+  //     在句末標點、空白、或 】 之後出現 A)~F) 時，前面換行
+  normalized = normalized.replace(/([。！？\s】])([A-F]\))/g, "$1\n$2");
+
+  // 1b. 子標題 【XXX】 獨佔一行
+  normalized = normalized.replace(/\s*【/g, "\n【");
+
+  // 1c. 編號要點 "1) " "2) " "3) " "4) " "5) " "6) " "7) " 換行
+  //     注意：要排除已在 A)-F) 章節，並且不能誤拆 A1) 之類
+  normalized = normalized.replace(/([。！？\s】])\s*([1-9])\)\s/g, "$1\n$2) ");
+
+  // 1d. 「數據佐證:」「推論邏輯:」「操作意涵:」等子分類關鍵字
+  //     只在句末標點後才強制換行，避免拆散 "1) 數據佐證:" 這種正確格式
+  const subKeywords = [
+    "數據佐證", "推論邏輯", "操作意涵", "綜合判斷", "綜合研判",
+    "理由", "依據", "結論", "建議", "風險警示", "操作風格判讀",
+    "買超集中度", "乖離率分布", "資金共識度",
+  ];
+  subKeywords.forEach(k => {
+    const re = new RegExp(`([。！？；])\\s*(${k})\\s*[:：]`, "g");
+    normalized = normalized.replace(re, "$1\n$2：");
+  });
+
+  // 1e. 連續空行壓縮
+  normalized = normalized.replace(/\n{3,}/g, "\n\n");
+
+  // ── Step 2: 切割成章節 ──────────────────────────────
+  const lines = normalized.split("\n");
   const sections = [];
   let cur = null;
   const headerRe = /^([A-F])\)\s*(.+?)\s*$/;
+
   lines.forEach(line => {
-    const m = headerRe.exec(line.trim());
+    const t = line.trim();
+    const m = headerRe.exec(t);
     if (m) {
       if (cur) sections.push(cur);
       cur = { code: m[1], title: m[2], body: [] };
     } else if (cur) {
-      cur.body.push(line);
-    } else {
-      // 章節前的 preamble
+      cur.body.push(t);
+    } else if (t) {
       if (!sections.length || sections[0].code !== "_") {
         sections.unshift({ code: "_", title: "", body: [] });
       }
-      sections[0].body.push(line);
+      sections[0].body.push(t);
     }
   });
   if (cur) sections.push(cur);
 
-  // 處理 markdown bold/italic + 關鍵字高亮
+  // ── Step 3: inline 處理（粗體、斜體、關鍵字高亮）────
   const mdInline = (s) => {
     let h = esc(s);
     h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     h = h.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
-    // 關鍵字高亮
     const kws = {
       "進場":"kw-blue","停損":"kw-red","了結":"kw-purple",
       "突破":"kw-blue","回測":"kw-orange","不跌破":"kw-green",
@@ -412,6 +443,7 @@ function renderAI(aiText, aiModel, aiProvider, aiVersion) {
       "觀察":"kw-gray","風險":"kw-red","連買":"kw-red","連賣":"kw-green",
       "中性":"kw-gray","高度集中":"kw-purple","強勢佈局":"kw-red",
       "逢低承接":"kw-blue","共識度高":"kw-red","被套":"kw-red",
+      "建議":"kw-blue","警示":"kw-red","承壓":"kw-green","支撐":"kw-blue",
     };
     for (const [kw, cls] of Object.entries(kws)) {
       h = h.replaceAll(kw, `<b class="${cls}">${kw}</b>`);
@@ -419,33 +451,111 @@ function renderAI(aiText, aiModel, aiProvider, aiVersion) {
     return h;
   };
 
+  // ── Step 4: 渲染每一行（自動辨識行類型）────────────
+  const renderLine = (t) => {
+    if (!t) return "";
+
+    // 4a. 子章節標題：以 【...】 開頭
+    const subTitleM = t.match(/^【(.+?)】(.*)$/);
+    if (subTitleM) {
+      const head = subTitleM[1];
+      const rest = (subTitleM[2] || "").trim();
+      return `<div class="ai-subtitle">📌 ${esc(head)}</div>` +
+             (rest ? `<div class="ai-line">${mdInline(rest)}</div>` : "");
+    }
+
+    // 4b. 編號 + 【子標題】：如 "1) 【投信動向】"
+    const numSubM = t.match(/^([1-9])\)\s*【(.+?)】(.*)$/);
+    if (numSubM) {
+      const num = numSubM[1];
+      const head = numSubM[2];
+      const rest = (numSubM[3] || "").trim();
+      return `<div class="ai-subtitle">📌 ${num}. ${esc(head)}</div>` +
+             (rest ? `<div class="ai-line">${mdInline(rest)}</div>` : "");
+    }
+
+    // 4c. 編號 + 券商名稱（B 段券商剖析）：如 "1) 康和-永和 (波段地頭蛇)"
+    //     特徵：編號後面是中文名稱 + 可選的括號描述，且 < 30 字
+    //     且這一行沒有 ":" 或 "："（區別於數據句）
+    const brokerHeaderM = t.match(/^([1-9])\)\s*([\u4e00-\u9fa5][^:：]{1,30})$/);
+    if (brokerHeaderM) {
+      const num = brokerHeaderM[1];
+      const name = brokerHeaderM[2];
+      return `<div class="ai-subtitle ai-subtitle-broker">🏛 ${num}. ${esc(name)}</div>`;
+    }
+
+    // 編號要點：「1) 數據佐證:」「2) 推論邏輯:」「3) 操作意涵:」
+    const numM = t.match(/^([1-9])\)\s*(.+)$/);
+    if (numM) {
+      const num = numM[1];
+      const rest = numM[2];
+      // 嘗試抓「子分類: 內容」格式
+      const labelM = rest.match(/^(數據佐證|推論邏輯|操作意涵|綜合判斷|綜合研判|理由|依據|結論|建議|風險警示|操作風格判讀|買超集中度|乖離率分布|資金共識度)\s*[:：]\s*(.*)$/);
+      if (labelM) {
+        const label = labelM[1];
+        const body = labelM[2];
+        const meta = {
+          "數據佐證":     { icon: "📊", type: "data" },
+          "推論邏輯":     { icon: "🧠", type: "logic" },
+          "操作意涵":     { icon: "🎯", type: "action" },
+          "綜合判斷":     { icon: "⚖️", type: "verdict" },
+          "綜合研判":     { icon: "⚖️", type: "verdict" },
+          "理由":         { icon: "💡", type: "logic" },
+          "依據":         { icon: "📋", type: "data" },
+          "結論":         { icon: "✅", type: "verdict" },
+          "建議":         { icon: "🔔", type: "action" },
+          "風險警示":     { icon: "⚠️", type: "risk" },
+          "操作風格判讀": { icon: "🎨", type: "action" },
+          "買超集中度":   { icon: "🎯", type: "data" },
+          "乖離率分布":   { icon: "📈", type: "data" },
+          "資金共識度":   { icon: "🤝", type: "logic" },
+        };
+        const m = meta[label] || { icon: "▸", type: "default" };
+        return `<div class="ai-point ai-point-${m.type}">
+          <span class="ai-point-num">${num}</span>
+          <div class="ai-point-content">
+            <div class="ai-point-label">${m.icon} ${esc(label)}</div>
+            <div class="ai-point-body">${mdInline(body)}</div>
+          </div>
+        </div>`;
+      }
+      // 沒抓到 label，當一般編號項
+      return `<div class="ai-point ai-point-default">
+        <span class="ai-point-num">${num}</span>
+        <div class="ai-point-content">
+          <div class="ai-point-body">${mdInline(rest)}</div>
+        </div>
+      </div>`;
+    }
+
+    // 列表項：• · ▪ - 開頭
+    if (/^[•·▪‧—-]\s/.test(t)) {
+      return `<div class="ai-bullet">${mdInline(t.substring(2))}</div>`;
+    }
+
+    // 一般段落
+    return `<div class="ai-line">${mdInline(t)}</div>`;
+  };
+
+  // ── Step 5: 組合最終 HTML ──────────────────────────
   let html = "";
-  sections.forEach((sec, i) => {
+  let sectionIdx = 0;
+  sections.forEach(sec => {
     if (sec.code === "_") {
-      // 前言
-      const body = sec.body.join("\n").trim();
-      if (body) html += `<div class="ai-preamble">${mdInline(body)}</div>`;
+      const body = sec.body.filter(x => x).map(renderLine).join("");
+      if (body) html += `<div class="ai-preamble">${body}</div>`;
       return;
     }
-    const bodyText = sec.body.join("\n").trim();
-    if (!bodyText) return;
-    const isOpen = i < 4;  // 預設展開前 4 段
+    const bodyHtml = sec.body.filter(x => x).map(renderLine).join("");
+    if (!bodyHtml) return;
+    const isOpen = sectionIdx < 4;
+    sectionIdx++;
     html += `<details class="ai-section" ${isOpen ? "open" : ""}>
       <summary>
         <span class="ai-code">${sec.code})</span>
         <span class="ai-title">${esc(sec.title)}</span>
       </summary>
-      <div class="ai-body">${
-        bodyText.split("\n").map(line => {
-          const t = line.trim();
-          if (!t) return "";
-          // 列表項目
-          if (/^[•·▪‧-]\s/.test(t) || /^\d+[.)]\s/.test(t)) {
-            return `<div class="ai-bullet">${mdInline(t)}</div>`;
-          }
-          return `<div class="ai-line">${mdInline(t)}</div>`;
-        }).join("")
-      }</div>
+      <div class="ai-body">${bodyHtml}</div>
     </details>`;
   });
 

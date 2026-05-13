@@ -347,13 +347,94 @@ html, body {
   line-height: 1.85;
   color: var(--text);
 }
-.ai-line { margin: 4px 0; }
+.ai-line {
+  margin: 6px 0;
+  color: var(--text);
+}
 .ai-bullet {
   margin: 5px 0 5px 16px;
   padding-left: 8px;
   border-left: 2px solid var(--border);
   color: var(--text-soft);
 }
+
+/* ── 子章節標題：📌【投信動向】 ───────────────────── */
+.ai-subtitle {
+  margin: 14px 0 8px;
+  padding: 7px 12px;
+  background: linear-gradient(90deg, rgba(245,200,66,0.12), rgba(245,200,66,0.04));
+  border-left: 3px solid var(--gold);
+  border-radius: 4px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--gold);
+  letter-spacing: 0.3px;
+}
+.ai-subtitle:first-child { margin-top: 0; }
+
+/* 券商名稱子標題（B 段） */
+.ai-subtitle-broker {
+  background: linear-gradient(90deg, rgba(155,89,182,0.15), rgba(155,89,182,0.04));
+  border-left-color: var(--purple);
+  color: #C39BD3;
+  font-size: 14px;
+}
+
+/* ── 編號要點區塊（1. 數據佐證 / 2. 推論邏輯 / 3. 操作意涵）── */
+.ai-point {
+  display: flex;
+  gap: 10px;
+  margin: 8px 0 8px 8px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 5px;
+}
+.ai-point-num {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.ai-point-content {
+  flex: 1;
+  min-width: 0;
+}
+.ai-point-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--gold);
+  margin-bottom: 4px;
+  letter-spacing: 0.3px;
+}
+.ai-point-body {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text);
+}
+
+/* 依類型區分邊框顏色 + num 圓圈背景 */
+.ai-point-data    { border-left-color: var(--accent); }
+.ai-point-data    .ai-point-num { background: var(--accent); }
+.ai-point-logic   { border-left-color: var(--purple); }
+.ai-point-logic   .ai-point-num { background: var(--purple); }
+.ai-point-action  { border-left-color: var(--orange); }
+.ai-point-action  .ai-point-num { background: var(--orange); }
+.ai-point-verdict { border-left-color: var(--gold); }
+.ai-point-verdict .ai-point-num { background: var(--gold); color: #1a1a1a; }
+.ai-point-risk    { border-left-color: var(--pos); }
+.ai-point-risk    .ai-point-num { background: var(--pos); }
+.ai-point-risk    .ai-point-label { color: var(--pos); }
+
 .ai-body strong { color: var(--gold); font-weight: 700; }
 .ai-body em     { color: var(--accent); font-style: italic; }
 
