@@ -447,9 +447,30 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
             "dealer_net_oi": 0,
         }
 
-        # 自營商有兩行（自行買賣+避險），需要累加
+        # ─────────────────────────────────────────────────────────
+        # TAIFEX 表格結構說明（含 rowspan 處理）
+        # ─────────────────────────────────────────────────────────
+        # 完整列頭順序（共 13 個資料欄位）：
+        #   身份別 | 多方口數 | 多方契約金額 | 空方口數 | 空方契約金額
+        #          | 交易多空淨額口數 | 交易多空淨額契約金額
+        #          | 未平倉多方口數 | 未平倉多方契約金額
+        #          | 未平倉空方口數 | 未平倉空方契約金額
+        #          | 未平倉多空淨額口數  ← 我們要的（name_idx + 11）
+        #          | 未平倉多空淨額契約金額
+        #
+        # 注意：「序號」與「商品名稱」用 rowspan 合併，僅出現在第一列。
+        #   - 自營商列 (第一列): tds = [序號, 商品名稱, 自營商, 多方口數, ...]
+        #                        name 在 tds[2]，net_oi 在 tds[13]
+        #   - 投信/外資列      : tds = [投信/外資, 多方口數, ...]
+        #                        name 在 tds[0]，net_oi 在 tds[11]
+        # ─────────────────────────────────────────────────────────
+
+        # 識別「身份別」的關鍵字（會出現在某個 td 內）
+        ROLE_KEYWORDS = ("自營商", "投信", "外資")
+
+        # 自營商可能有舊版兩行（自行買賣+避險）→ 累加防禦
         dealer_accumulated = 0
-        dealer_found = False
+        dealer_has_total = False
 
         for table in soup.find_all("table"):
             for tr in table.find_all("tr"):
@@ -457,35 +478,57 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
                 if len(tds) < 12:
                     continue
 
-                name = tds[0].get_text(strip=True)
                 vals = [td.get_text(strip=True) for td in tds]
 
-                # 多空淨額-未平倉口數 = index 11
-                net_oi = _safe_int(vals[11]) if len(vals) > 11 else 0
-                net_trade = _safe_int(vals[5]) if len(vals) > 5 else 0
+                # ── Step 1: 找出 name cell 的位置 ──
+                name = None
+                name_idx = -1
+                for i, v in enumerate(vals[:5]):  # 只在前 5 個 td 找身份別
+                    for kw in ROLE_KEYWORDS:
+                        if kw in v:
+                            name = v
+                            name_idx = i
+                            break
+                    if name_idx >= 0:
+                        break
 
+                if name_idx < 0:
+                    continue
+
+                # ── Step 2: 從 name_idx 偏移找未平倉淨額口數 (offset +11) ──
+                net_oi_idx = name_idx + 11
+                net_trade_idx = name_idx + 5
+
+                if net_oi_idx >= len(vals):
+                    print(f"  [futures] ⚠ {name} 欄位數不足 (len={len(vals)}, need {net_oi_idx+1})")
+                    continue
+
+                net_oi = _safe_int(vals[net_oi_idx])
+                net_trade = _safe_int(vals[net_trade_idx]) if net_trade_idx < len(vals) else 0
+
+                # 防護：若 net_oi 異常大（>100萬口在台指期不合理），改用交易淨額
                 if abs(net_oi) > 1_000_000:
                     print(f"  [futures] ⚠ {name} net_oi={net_oi} 異常大，改用 net_trade={net_trade}")
                     net_oi = net_trade
 
-                print(f"  [futures] {date_str} | {name} | OI={net_oi}")
+                print(f"  [futures] {date_str} | {name} (name_idx={name_idx}, oi_idx={net_oi_idx}) | OI={net_oi:,}")
 
+                # ── Step 3: 依身份別分配 ──
                 if "外資" in name and "合計" not in name:
                     result["foreign_net_oi"] = net_oi
                 elif "投信" in name:
                     result["trust_net_oi"] = net_oi
                 elif "自營商" in name:
                     if "合計" in name:
-                        # 如果有合計行，直接用合計
+                        # 舊版有「自營商合計」列 → 優先採用
                         result["dealer_net_oi"] = net_oi
-                        dealer_found = True
+                        dealer_has_total = True
                     else:
-                        # 自行買賣 + 避險 → 累加
+                        # 新版單列「自營商」or 舊版兩列（自行買賣+避險）
                         dealer_accumulated += net_oi
-                        dealer_found = True
 
-        # 如果沒有合計行，用累加值
-        if dealer_found and result["dealer_net_oi"] == 0:
+        # 沒有「自營商合計」時，用累加結果
+        if not dealer_has_total:
             result["dealer_net_oi"] = dealer_accumulated
 
         if any(v != 0 for k, v in result.items() if k != "date"):
