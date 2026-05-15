@@ -4,7 +4,7 @@
 # 修正重點：
 #   1. 預設模型改為 gemini-2.5-pro（分析最專業，免費 25 RPD）
 #   2. 429 Quota Exceeded 時自動 fallback 到下一個模型（不再無效重試）
-#   3. Prompt 精簡：只送 Top 5 外資 × Top 5 檔（減少 60% token 消耗）
+#   3. Prompt 精簡：只送 Top 5 券商分點 × Top 5 檔（減少 60% token 消耗）
 #   4. Fixup pass 改為可選（節省 API 呼叫次數）
 #   5. 完整的錯誤分類日誌
 
@@ -57,10 +57,10 @@ BASE_SLEEP = float(os.getenv("GEMINI_RETRY_BASE_SLEEP", "2.0"))
 ENABLE_FIXUP = os.getenv("GEMINI_ENABLE_FIXUP", "1").strip() != "0"
 
 # Prompt 資料範圍（pro 模型可處理更多 context）
-PROMPT_TOP_BROKERS = int(os.getenv("PROMPT_TOP_BROKERS", "7"))  # 送幾家外資
+PROMPT_TOP_BROKERS = int(os.getenv("PROMPT_TOP_BROKERS", "7"))  # 送幾家券商分點
 PROMPT_TOP_STOCKS = int(os.getenv("PROMPT_TOP_STOCKS", "7"))    # 每家送幾檔
 
-ANALYZER_VERSION = "v11-pro-expert-deep"
+ANALYZER_VERSION = "v12-domestic-broker-fix"
 
 
 # ── 檔案讀寫 ──────────────────────────────────────
@@ -109,6 +109,11 @@ def build_prompt(summary: dict) -> str:
 
     # ── 角色設定（專業級） ──
     lines.append("你是華爾街等級的台股券商籌碼分析師，擁有 20 年經驗，報告對象是專業操盤手與法人投資經理。")
+    lines.append("**重要前提**：本報告分析的是『台灣本土券商分點』（傳奇大戶分點，如康和-永和、凱基-松山、富邦-新店、群益-大安、國泰-敦南等）。")
+    lines.append("這些是台灣本土券商旗下知名分點，**並非外資券商**（外資是指美林、瑞銀、摩根士丹利等海外機構）。")
+    lines.append("撰寫報告時請使用『券商分點』、『本土券商』、『大戶分點』、『傳奇分點』等正確用詞，")
+    lines.append("**嚴禁將這些券商分點稱為『外資』或『外資分點』**。")
+    lines.append("『外資』一詞只能用於三大法人中的『外資及陸資』機構整體買賣超數據（從大盤籌碼資料來）。")
     lines.append("語氣要求：專業、精準、有洞察力。使用繁體中文，純文字，手機好讀格式。")
     lines.append("分析深度：不要泛泛而談，每一點都必須有『數據佐證 → 推論邏輯 → 操作意涵』三層結構。")
     lines.append("嚴格規則：只根據我提供的資料分析，不要編造新聞/題材/財報/K線型態。")
@@ -139,9 +144,10 @@ def build_prompt(summary: dict) -> str:
             lines.append(f"  自營商淨買超: {today_inst['dealer']['net']:,} 元")
             lines.append("")
 
-    # ── 外資分點明細（增加至 7 家 × 7 檔） ──
+    # ── 本土券商分點明細（增加至 7 家 × 7 檔） ──
     brokers_to_send = top_preview[:PROMPT_TOP_BROKERS]
-    lines.append(f"【外資分點明細】（依總淨超排序，前{len(brokers_to_send)}家，每家Top{PROMPT_TOP_STOCKS}）")
+    lines.append(f"【本土券商分點明細】（依總淨超排序，前{len(brokers_to_send)}家，每家Top{PROMPT_TOP_STOCKS}）")
+    lines.append("（以下為台灣本土券商分點資料，**不是外資**，請勿在報告中稱為『外資』）")
     for block in brokers_to_send:
         lines.append(f"- {block.get('broker','')}｜總淨超 {block.get('total_net',0)} 張")
         for r in (block.get("rows") or [])[:PROMPT_TOP_STOCKS]:
@@ -174,7 +180,8 @@ def build_prompt(summary: dict) -> str:
     lines.append("   - 【自營商動向（重點追蹤）】：列出近5日每一天的自營商買賣超金額（逐日列出），")
     lines.append("     區分自行買賣 vs 避險部位，判斷自營商是主動佈局還是被動避險，")
     lines.append("     若連續偏多或偏空，推斷其對後市的看法")
-    lines.append("   - 外資現貨動向：近5日買賣超趨勢（連買/連賣/轉折），計算5日累計金額")
+    lines.append("   - 外資（三大法人之外資及陸資機構）現貨動向：近5日買賣超趨勢（連買/連賣/轉折），計算5日累計金額")
+    lines.append("     ※ 注意：『外資』在此僅指三大法人中的外資機構整體買賣超，**不包含本土券商分點**")
     lines.append("   - 三大法人合力方向：投信/自營/外資三者是否同向？若投信與外資背離代表什麼？")
     lines.append("     若自營商獨自偏空但投信偏多，暗示什麼？")
     lines.append("   - 成交量分析：今日量能 vs 5日均量（放量/縮量/爆量倍率），量價配合度")
@@ -221,9 +228,10 @@ def build_prompt(summary: dict) -> str:
     lines.append("")
 
     # F) 交叉比對
-    lines.append("F) 券商交叉比對亮點（3~5 點）：")
-    lines.append("   找出被 2 家以上外資同時買超的標的，分析共識度與潛在意義。")
-    lines.append("   格式：『XXXX 股名被 A、B、C 三家外資合計買超 N 張，乖離率 X%，暗示...』")
+    lines.append("F) 券商分點交叉比對亮點（3~5 點）：")
+    lines.append("   找出被 2 家以上**本土券商分點**同時買超的標的，分析共識度與潛在意義。")
+    lines.append("   格式：『XXXX 股名被 A、B、C 三家券商分點合計買超 N 張，乖離率 X%，暗示...』")
+    lines.append("   ※ 嚴禁使用『外資』描述這些券商分點。")
     lines.append("")
 
     # 硬性規則
@@ -242,7 +250,8 @@ def build_prompt(summary: dict) -> str:
 def fixup_prompt(draft: str) -> str:
     return "\n".join([
         "你是華爾街等級的台股券商籌碼分析師。以下草稿不完整或不夠深入，請你『補齊並強化』後輸出完整 A~F。",
-        "硬性規則：全文至少60行；A至少5點(含數據)；B Top3外資各至少4點；C 5檔每檔5行；D至少5點(含持股水位)；F至少3點交叉比對。",
+        "**前提**：報告分析的是台灣本土券商分點（傳奇大戶分點），**不是外資**。",
+        "硬性規則：全文至少60行；A至少5點(含數據)；B Top3 本土券商分點各至少4點；C 5檔每檔5行；D至少5點(含持股水位)；F至少3點交叉比對。",
         "每一點都要有『數據 → 推論 → 操作意涵』三層結構。",
         "請直接輸出『完整版本』，保持純文字、段落間空一行、每點用 1) 2) 3)。",
         "",
@@ -428,7 +437,7 @@ def validate(text: str) -> list:
         block = s[i:end]
         return len(re.findall(r"(?m)^\s*\d\)\s+", block))
 
-    # A >= 5, B >= 3 (top3 外資), D >= 5
+    # A >= 5, B >= 3 (top3 本土券商分點), D >= 5
     if count_points("A)") < 5:
         problems.append(f"A) points={count_points('A)')}<5")
     if count_points("D)") < 4:
