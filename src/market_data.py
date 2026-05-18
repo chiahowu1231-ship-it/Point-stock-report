@@ -448,29 +448,46 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
         }
 
         # ─────────────────────────────────────────────────────────
-        # TAIFEX 表格結構說明（含 rowspan 處理）
+        # TAIFEX futContractsDate 表格結構（重要！）
         # ─────────────────────────────────────────────────────────
-        # 完整列頭順序（共 13 個資料欄位）：
-        #   身份別 | 多方口數 | 多方契約金額 | 空方口數 | 空方契約金額
-        #          | 交易多空淨額口數 | 交易多空淨額契約金額
-        #          | 未平倉多方口數 | 未平倉多方契約金額
-        #          | 未平倉空方口數 | 未平倉空方契約金額
-        #          | 未平倉多空淨額口數  ← 我們要的（name_idx + 11）
-        #          | 未平倉多空淨額契約金額
+        # ⚠️ 此頁面會列出「所有期貨契約」：臺股期貨、電子期貨、金融期貨、
+        #    小型臺指、微型臺指… 每個商品各有 自營商/投信/外資 三列。
+        #    → 必須【只取「臺股期貨」這個商品】，否則會把所有商品混加，
+        #      導致數值爆增且正負號錯亂（前一版的 bug 來源）。
         #
-        # 注意：「序號」與「商品名稱」用 rowspan 合併，僅出現在第一列。
-        #   - 自營商列 (第一列): tds = [序號, 商品名稱, 自營商, 多方口數, ...]
-        #                        name 在 tds[2]，net_oi 在 tds[13]
-        #   - 投信/外資列      : tds = [投信/外資, 多方口數, ...]
-        #                        name 在 tds[0]，net_oi 在 tds[11]
+        # 每個資料列的數字欄位（身份別之後，共 12 個）：
+        #   +1  多方交易口數      +2  多方交易契約金額
+        #   +3  空方交易口數      +4  空方交易契約金額
+        #   +5  交易多空淨額口數  +6  交易多空淨額契約金額
+        #   +7  多方未平倉口數    +8  多方未平倉契約金額
+        #   +9  空方未平倉口數    +10 空方未平倉契約金額
+        #   +11 未平倉多空淨額口數  ← 我們要的（name_idx + 11）
+        #   +12 未平倉多空淨額契約金額
+        #
+        # rowspan 處理：「序號」「商品名稱」用 rowspan=3 合併，只出現在
+        #   該商品的第一列（自營商列）。投信/外資列的 td 數量會少 2 個。
+        #   - 自營商列: [序號, 商品名稱, 身份別, 數字×12...]  → name 在 idx 2
+        #   - 投信/外資列: [身份別, 數字×12...]               → name 在 idx 0
         # ─────────────────────────────────────────────────────────
 
-        # 識別「身份別」的關鍵字（會出現在某個 td 內）
         ROLE_KEYWORDS = ("自營商", "投信", "外資")
 
-        # 自營商可能有舊版兩行（自行買賣+避險）→ 累加防禦
+        # 只接受這些商品名稱（臺股期貨；排除電子期、金融期、小型臺指等）
+        # 「臺股期貨」有時寫作「臺股期貨」或含全形/半形差異，用寬鬆比對
+        def _is_tx_product(text: str) -> bool:
+            t = (text or "").replace(" ", "")
+            # 必須包含「臺股期貨」或「台股期貨」，且不能是小型/微型
+            if "小型臺指" in t or "微型臺指" in t or "小型台指" in t:
+                return False
+            return ("臺股期貨" in t) or ("台股期貨" in t)
+
+        # 追蹤「目前所在的商品區塊」是否為臺股期貨
+        # 因為商品名稱 rowspan，只有自營商列帶商品名，需沿用到投信/外資列
+        current_is_tx = False
+
         dealer_accumulated = 0
         dealer_has_total = False
+        rows_seen = 0
 
         for table in soup.find_all("table"):
             for tr in table.find_all("tr"):
@@ -480,10 +497,10 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
 
                 vals = [td.get_text(strip=True) for td in tds]
 
-                # ── Step 1: 找出 name cell 的位置 ──
+                # ── Step 1: 找出身份別 cell 的位置 ──
                 name = None
                 name_idx = -1
-                for i, v in enumerate(vals[:5]):  # 只在前 5 個 td 找身份別
+                for i, v in enumerate(vals[:5]):
                     for kw in ROLE_KEYWORDS:
                         if kw in v:
                             name = v
@@ -495,7 +512,23 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
                 if name_idx < 0:
                     continue
 
-                # ── Step 2: 從 name_idx 偏移找未平倉淨額口數 (offset +11) ──
+                # ── Step 2: 判斷此列屬於哪個商品 ──
+                # 若 name_idx >= 2，代表此列帶有「序號+商品名稱」(自營商列)
+                #   → 商品名稱在 name_idx - 1
+                # 若 name_idx == 0，代表沿用上一列的商品 (投信/外資列)
+                if name_idx >= 2:
+                    product_name = vals[name_idx - 1]
+                    current_is_tx = _is_tx_product(product_name)
+                    if not current_is_tx:
+                        # 進入非臺股期貨商品區塊（如電子期、小型臺指）
+                        print(f"  [futures] {date_str} | 跳過商品「{product_name}」")
+                # name_idx == 0 → 沿用 current_is_tx
+
+                # ── Step 3: 非臺股期貨 → 跳過 ──
+                if not current_is_tx:
+                    continue
+
+                # ── Step 4: 取未平倉多空淨額口數 (offset +11) ──
                 net_oi_idx = name_idx + 11
                 net_trade_idx = name_idx + 5
 
@@ -506,30 +539,33 @@ def fetch_futures_institutional(date_str: str) -> Optional[dict]:
                 net_oi = _safe_int(vals[net_oi_idx])
                 net_trade = _safe_int(vals[net_trade_idx]) if net_trade_idx < len(vals) else 0
 
-                # 防護：若 net_oi 異常大（>100萬口在台指期不合理），改用交易淨額
+                # 防護：台指期單一法人未平倉淨額正常在 ±20 萬口內，
+                #       若 >100 萬口必定是抓錯欄位，改用交易淨額
                 if abs(net_oi) > 1_000_000:
-                    print(f"  [futures] ⚠ {name} net_oi={net_oi} 異常大，改用 net_trade={net_trade}")
+                    print(f"  [futures] ⚠ {name} net_oi={net_oi:,} 異常大，改用 net_trade={net_trade:,}")
                     net_oi = net_trade
 
-                print(f"  [futures] {date_str} | {name} (name_idx={name_idx}, oi_idx={net_oi_idx}) | OI={net_oi:,}")
+                rows_seen += 1
+                print(f"  [futures] {date_str} | 臺股期貨/{name} "
+                      f"(name_idx={name_idx}, oi_idx={net_oi_idx}) | 淨OI={net_oi:,}")
 
-                # ── Step 3: 依身份別分配 ──
+                # ── Step 5: 依身份別分配 ──
                 if "外資" in name and "合計" not in name:
                     result["foreign_net_oi"] = net_oi
                 elif "投信" in name:
                     result["trust_net_oi"] = net_oi
                 elif "自營商" in name:
                     if "合計" in name:
-                        # 舊版有「自營商合計」列 → 優先採用
                         result["dealer_net_oi"] = net_oi
                         dealer_has_total = True
                     else:
-                        # 新版單列「自營商」or 舊版兩列（自行買賣+避險）
                         dealer_accumulated += net_oi
 
-        # 沒有「自營商合計」時，用累加結果
         if not dealer_has_total:
             result["dealer_net_oi"] = dealer_accumulated
+
+        if rows_seen == 0:
+            print(f"  [futures] ⚠ {date_str} 未找到任何臺股期貨資料列")
 
         if any(v != 0 for k, v in result.items() if k != "date"):
             return result
